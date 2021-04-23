@@ -1,3 +1,7 @@
+import pkg_resources
+import os
+import numpy as np
+
 
 class NGPS:
     """Units are Angstroms or Angstroms/pixel
@@ -56,3 +60,21 @@ class NGPS:
         [4.4700, 4.0422, 5.2198, 6.0026, 6.7150,
          7.1846, 7.1586, 6.6496, 5.8196, 4.6316, 4.5122]
     ]
+    thrpt = None
+
+    def read_thrpt(self):
+        # path to atlas for input lamp
+        path = "data/thrpt.csv"
+        pkg = __name__.split('.')[0]
+        tpath = pkg_resources.resource_filename(pkg, path)
+
+        # verify path
+        if os.path.exists(tpath):
+            print("Reading throughput data in: %s" % tpath)
+        else:
+            print("ERROR: Throughput data not found in %s" % tpath)
+
+        tdata = np.genfromtxt(tpath, delimiter=',')
+
+        self.thrpt = tdata
+

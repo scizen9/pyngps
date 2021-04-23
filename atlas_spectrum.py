@@ -26,8 +26,11 @@ class AtlasSpectrum(NGPS):
     native_dispersion = None
     det_flux = None
     det_waves = None
+    det_thrpt = None
     det_res_pixels = None
     det_seg_waves = None
+    det_seg_slit = None
+    det_seg_spot = None
     lamp = None
 
     def __init__(self, lamp, verbose=False):
@@ -44,6 +47,11 @@ class AtlasSpectrum(NGPS):
             print("Reading atlas spectrum in: %s" % atpath)
         else:
             print("ERROR: Atlas spectrum not found for %s" % atpath)
+            return
+
+        # read in throughput and set wavelength scalte
+        self.read_thrpt()
+        twaves = self.thrpt[:, 0] * 10.  # convert from nm to Ang
 
         # read in atlas data and header
         ff = pf.open(atpath)
@@ -61,56 +69,75 @@ class AtlasSpectrum(NGPS):
         ff.close()
 
         # get a resampled spectrum for each detector
-        det_flux = []
-        det_waves = []
-        det_res_pixels = []
-        det_seg_waves = []
+        det_flux = []           # spectrum
+        det_waves = []          # wavelengths
+        det_thrpt = []          # throughput
+        det_seg_res = []        # seg resolution (pixels)
+        det_seg_waves = []      # seg waves (A)
+        det_seg_slit = []       # seg slit size (pixels)
+        det_seg_spot = []       # seg spot size (pixels)
+        max_flux = 0.
 
         # loop over detectors (u, g, r, i)
-        for i, lims in enumerate(self.detector_wave_limits):
+        for idet, lims in enumerate(self.detector_wave_limits):
 
             # get model wavelength scale
-            det_pix = np.arange(0, self.detector_npix[i])
-            waves = polyval(det_pix, self.detector_disp_coeffs[i])
+            det_pix = np.arange(0, self.detector_npix[idet])
+            waves = polyval(det_pix, self.detector_disp_coeffs[idet])
             flux = waves.copy()
             det_waves.append(waves)
 
-            # get resolution in pixels
-            res_pix = []
-            seg_waves = []
+            # make interpolation function
+            thrpt_int = interpolate.interp1d(twaves, self.thrpt[:, idet+1],
+                                             kind='cubic',
+                                             bounds_error=False,
+                                             fill_value='extrapolate')
+            # get throughput on det wavelength scale
+            thrpt = thrpt_int(waves)
+            det_thrpt.append(thrpt)
 
-            # loop over resolution segments (11)
-            for j, slit_pix in enumerate(self.slit_pix[i]):
+            # get resolution in pixels
+            seg_res_pix = []
+            seg_waves = []
+            seg_spot_pix = []
+            seg_slit_pix = []
+
+            # loop over optical model segments (11)
+            for iseg in range(len(self.seg_waves[idet])):
 
                 # Skip the last one
-                if j < len(self.slit_pix[i]) - 1:
+                if iseg < len(self.slit_pix[idet]) - 1:
 
-                    # segment slit projection in pixels
-                    sp = (slit_pix + self.slit_pix[i][j+1]) / 2.
+                    # segment slit projection in pixels for segment
+                    slit_pix = (self.slit_pix[idet][iseg] +
+                                self.slit_pix[idet][iseg+1]) / 2.
+                    seg_slit_pix.append(slit_pix)
 
-                    # add spot size in quadrature
-                    eff_res = np.sqrt(sp**2 +
-                                      (self.spot_size_microns[i][j] /
-                                       self.pix_size_microns)**2)
+                    # spot size for segment
+                    spot_pix = (self.spot_size_microns[idet][iseg] +
+                                self.spot_size_microns[idet][iseg+1]) / (15. *
+                                                                         2.)
+                    seg_spot_pix.append(spot_pix)
+
+                    # add slit size and spot size to get resolution in pixels
+                    res_pix = np.sqrt(slit_pix**2 + spot_pix**2)
+                    seg_res_pix.append(res_pix)
+
+                    # get segment wavelength limits
+                    w0 = self.seg_waves[idet][iseg]
+                    w1 = self.seg_waves[idet][iseg + 1]
 
                     # get segment effective wavelength
-                    seg_waves.append(
-                        (self.seg_waves[i][j] + self.seg_waves[i][j+1]) / 2.
-                    )
-
-                    # store resolution
-                    res_pix.append(eff_res)
+                    seg_waves.append((w0 + w1) / 2.)
 
                     # filter atlas spectrum to resolution
-                    spec = gaussian_filter1d(self.flux, eff_res)
+                    spec = gaussian_filter1d(self.flux, res_pix)
 
                     # make interpolation function
-                    det_int = interpolate.interp1d(self.waves, spec, kind='cubic',
+                    det_int = interpolate.interp1d(self.waves, spec,
+                                                   kind='cubic',
                                                    bounds_error=False,
                                                    fill_value='extrapolate')
-                    # get segment wavelength limits
-                    w0 = self.seg_waves[i][j]
-                    w1 = self.seg_waves[i][j+1]
 
                     # segment pixels
                     seg_pix = [k for k, w in enumerate(waves) if w0 <= w <= w1]
@@ -121,18 +148,34 @@ class AtlasSpectrum(NGPS):
                     # report if verbose
                     if verbose:
                         print("%s-band: seg %d; %.2f - %.2f A at %.4f px sig"
-                              % (self.det_bands[i], j, w0, w1, sp))
+                              % (self.det_bands[idet], iseg, w0, w1, res_pix))
+
+            # apply throughput function
+            flux *= thrpt
 
             # store results
             det_flux.append(flux)
-            det_res_pixels.append(res_pix)
+            det_seg_res.append(seg_res_pix)
             det_seg_waves.append(seg_waves)
+            det_seg_slit.append(seg_slit_pix)
+            det_seg_spot.append(seg_spot_pix)
+            # get max flux
+            if np.nanmax(flux) > max_flux:
+                max_flux = np.nanmax(flux)
+
+        # normalize flux
+        flux_scale = 60000 / max_flux
+        for idet in range(self.n_det):
+            det_flux[idet] *= flux_scale
 
         # record results
         self.det_flux = det_flux
         self.det_waves = det_waves
-        self.det_res_pixels = det_res_pixels
+        self.det_thrpt = det_thrpt
+        self.det_res_pixels = det_seg_res
         self.det_seg_waves = det_seg_waves
+        self.det_seg_slit = det_seg_slit
+        self.det_seg_spot = det_seg_spot
 
     def plot_spec(self):
         pl.clf()
@@ -141,17 +184,35 @@ class AtlasSpectrum(NGPS):
                     color=self.det_colors[i], label=self.det_bands[i])
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
-        pl.ylabel("Arb. Flux")
+        pl.ylabel("Simulated DN")
+        pl.legend()
+        pl.show()
+
+    def plot_thrpt(self):
+        pl.clf()
+        for i in range(self.n_det):
+            pl.plot(self.det_waves[i], self.det_thrpt[i],
+                    color=self.det_colors[i], label=self.det_bands[i])
+        pl.title("NGPS Calculated Throughput")
+        pl.xlabel("Wavelength(A)")
+        pl.ylabel("Throughput")
         pl.legend()
         pl.show()
 
     def plot_res(self):
         pl.clf()
-        for i in range(self.n_det):
-            pl.plot(self.det_seg_waves[i], self.det_res_pixels[i],
-                    color=self.det_colors[i], label=self.det_bands[i])
+        for idet in range(self.n_det):
+            pl.plot(self.det_seg_waves[idet], self.det_res_pixels[idet],
+                    color=self.det_colors[idet], label=self.det_bands[idet])
+            pl.scatter(self.det_seg_waves[idet], self.det_seg_slit[idet],
+                       color=self.det_colors[idet], marker='+')
+            pl.scatter(self.det_seg_waves[idet], self.det_seg_spot[idet],
+                       color=self.det_colors[idet], marker='x')
+        pl.text(6000., 0.75, "Spot Size")
+        pl.text(6000., 2.45, "Slit Size")
         pl.title("NGPS Resolution 0.5\" slit")
         pl.xlabel("Wavelength(A)")
         pl.ylabel("RMS px")
-        pl.legend()
+        pl.legend(loc="center right")
+        pl.grid()
         pl.show()
