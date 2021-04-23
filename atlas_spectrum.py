@@ -49,9 +49,9 @@ class AtlasSpectrum(NGPS):
             print("ERROR: Atlas spectrum not found for %s" % atpath)
             return
 
-        # read in throughput and set wavelength scalte
+        # read in throughput and set wavelength scale
         self.read_thrpt()
-        twaves = self.thrpt[:, 0] * 10.  # convert from nm to Ang
+        thrpt_waves = self.thrpt[:, 0] * 10.  # convert from nm to Ang
 
         # read in atlas data and header
         ff = pf.open(atpath)
@@ -79,16 +79,16 @@ class AtlasSpectrum(NGPS):
         max_flux = 0.
 
         # loop over detectors (u, g, r, i)
-        for idet, lims in enumerate(self.detector_wave_limits):
+        for idet in range(self.n_det):
 
             # get model wavelength scale
             det_pix = np.arange(0, self.detector_npix[idet])
             waves = polyval(det_pix, self.detector_disp_coeffs[idet])
-            flux = waves.copy()
             det_waves.append(waves)
+            flux = waves.copy()
 
             # make interpolation function
-            thrpt_int = interpolate.interp1d(twaves, self.thrpt[:, idet+1],
+            thrpt_int = interpolate.interp1d(thrpt_waves, self.thrpt[:, idet+1],
                                              kind='cubic',
                                              bounds_error=False,
                                              fill_value='extrapolate')
@@ -96,7 +96,7 @@ class AtlasSpectrum(NGPS):
             thrpt = thrpt_int(waves)
             det_thrpt.append(thrpt)
 
-            # get resolution in pixels
+            # get resolution in pixels, which varies over the segments
             seg_res_pix = []
             seg_waves = []
             seg_spot_pix = []
@@ -168,6 +168,8 @@ class AtlasSpectrum(NGPS):
         for idet in range(self.n_det):
             det_flux[idet] *= flux_scale
 
+        self.flux *= (flux_scale / 5.0)
+
         # record results
         self.det_flux = det_flux
         self.det_waves = det_waves
@@ -179,6 +181,8 @@ class AtlasSpectrum(NGPS):
 
     def plot_spec(self):
         pl.clf()
+        pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
+                label="Atlas")
         for i in range(self.n_det):
             pl.plot(self.det_waves[i], self.det_flux[i],
                     color=self.det_colors[i], label=self.det_bands[i])
@@ -186,6 +190,8 @@ class AtlasSpectrum(NGPS):
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Simulated DN")
         pl.legend()
+        pl.ylim((-200, 61000))
+        pl.xlim((3000., 10500.))
         pl.show()
 
     def plot_thrpt(self):
