@@ -9,6 +9,36 @@ import os
 import matplotlib.pyplot as pl
 
 
+def ngps_noise_model(spec, gain, rdnoise):
+    """
+    Calculate noise model.
+
+    Includes Poisson and readnoise
+
+    :param spec: flux per pixel in DN
+    :param gain: e-/DN
+    :param rdnoise: in e-
+    :return: flux per pixel with noise
+    """
+
+    # Add Poisson noise first
+    vals = len(np.unique(spec))
+    vals = 2 ** np.ceil(np.log2(vals))
+    floor = np.nanmin(spec) + 1.0
+    bias_spec = spec + floor
+    noisy = np.random.poisson(bias_spec * vals) / float(vals) - floor
+
+    # Add Read Noise
+    mean = 0.
+    sigma = rdnoise / gain  # convert to DN
+    gauss = np.random.normal(mean, sigma, len(spec))
+
+    # Calc noise
+    noise = np.sqrt(bias_spec) - np.sqrt(floor) + sigma
+
+    return noisy + gauss, noise
+
+
 class AtlasSpectrum(NGPS):
     """
     Atlas spectrum class for reading an atlas spectrum for NGPS
@@ -25,6 +55,7 @@ class AtlasSpectrum(NGPS):
     header = None
     native_dispersion = None
     det_flux = None
+    det_noise = None
     det_waves = None
     det_thrpt = None
     det_res_pixels = None
@@ -33,7 +64,7 @@ class AtlasSpectrum(NGPS):
     det_seg_spot = None
     lamp = None
 
-    def __init__(self, lamp, verbose=False):
+    def __init__(self, lamp, rdnoise=3.5, gain=5.0, verbose=False):
 
         self.lamp = lamp
 
@@ -68,8 +99,24 @@ class AtlasSpectrum(NGPS):
                float(np.nanmin(self.waves)), float(np.nanmax(self.waves))))
         ff.close()
 
+        # get gain and readnoise
+        if isinstance(rdnoise, float):
+            rdn = [rdnoise, rdnoise, rdnoise, rdnoise]
+        elif len(rdnoise) != 4:
+            rdn = [rdnoise[0], rdnoise[0], rdnoise[0], rdnoise[0]]
+        else:
+            rdn = rdnoise
+
+        if isinstance(gain, float):
+            gn = [gain, gain, gain, gain]
+        elif len(gain) != 4:
+            gn = [gain[0], gain[0], gain[0], gain[0]]
+        else:
+            gn = gain
+
         # get a resampled spectrum for each detector
         det_flux = []           # spectrum
+        det_noise = []
         det_waves = []          # wavelengths
         det_thrpt = []          # throughput
         det_seg_res = []        # seg resolution (pixels)
@@ -167,11 +214,16 @@ class AtlasSpectrum(NGPS):
         flux_scale = 60000 / max_flux
         for idet in range(self.n_det):
             det_flux[idet] *= flux_scale
+            # apply noise
+            det_flux[idet], noise = ngps_noise_model(det_flux[idet],
+                                                     gn[idet], rdn[idet])
+            det_noise.append(noise)
 
         self.flux *= (flux_scale / 5.0)
 
         # record results
         self.det_flux = det_flux
+        self.det_noise = det_noise
         self.det_waves = det_waves
         self.det_thrpt = det_thrpt
         self.det_res_pixels = det_seg_res
@@ -184,8 +236,9 @@ class AtlasSpectrum(NGPS):
         pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
                 label="Atlas")
         for i in range(self.n_det):
-            pl.plot(self.det_waves[i], self.det_flux[i],
-                    color=self.det_colors[i], label=self.det_bands[i])
+            pl.errorbar(self.det_waves[i], self.det_flux[i],
+                        yerr=self.det_noise[i], color=self.det_colors[i],
+                        ecolor='black', label=self.det_bands[i])
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Simulated DN")
