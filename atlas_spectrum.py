@@ -64,7 +64,7 @@ class AtlasSpectrum(NGPS):
     det_seg_spot = None
     lamp = None
 
-    def __init__(self, lamp, rdnoise=3.5, gain=5.0, verbose=False):
+    def __init__(self, lamp, verbose=False):
 
         self.lamp = lamp
 
@@ -98,21 +98,6 @@ class AtlasSpectrum(NGPS):
               (len(self.waves),
                float(np.nanmin(self.waves)), float(np.nanmax(self.waves))))
         ff.close()
-
-        # get gain and readnoise
-        if isinstance(rdnoise, float):
-            rdn = [rdnoise, rdnoise, rdnoise, rdnoise]
-        elif len(rdnoise) != 4:
-            rdn = [rdnoise[0], rdnoise[0], rdnoise[0], rdnoise[0]]
-        else:
-            rdn = rdnoise
-
-        if isinstance(gain, float):
-            gn = [gain, gain, gain, gain]
-        elif len(gain) != 4:
-            gn = [gain[0], gain[0], gain[0], gain[0]]
-        else:
-            gn = gain
 
         # get a resampled spectrum for each detector
         det_flux = []           # spectrum
@@ -216,10 +201,11 @@ class AtlasSpectrum(NGPS):
             det_flux[idet] *= flux_scale
             # apply noise
             det_flux[idet], noise = ngps_noise_model(det_flux[idet],
-                                                     gn[idet], rdn[idet])
+                                                     self.det_gain[idet],
+                                                     self.det_readnoise[idet])
             det_noise.append(noise)
 
-        self.flux *= (flux_scale / 5.0)
+        self.flux *= (flux_scale / 5.0)     # scale for reference
 
         # record results
         self.det_flux = det_flux
@@ -238,7 +224,7 @@ class AtlasSpectrum(NGPS):
         for i in range(self.n_det):
             pl.errorbar(self.det_waves[i], self.det_flux[i],
                         yerr=self.det_noise[i], color=self.det_colors[i],
-                        ecolor='black', label=self.det_bands[i])
+                        ecolor='black', label=self.det_bands[i], barsabove=True)
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Simulated DN")
