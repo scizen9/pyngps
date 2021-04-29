@@ -63,11 +63,12 @@ class AtlasSpectrum(NGPS):
     det_seg_slit = None
     det_seg_spot = None
     lamp = None
-    ymax = 0.
+    ymax = None
 
     def __init__(self, lamp, calib=True, verbose=False):
 
         self.lamp = lamp
+        self.ymax = 0.
 
         # path to atlas for input lamp
         path = "data/%s.fits" % lamp.lower()
