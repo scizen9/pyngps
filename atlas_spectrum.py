@@ -233,6 +233,18 @@ class AtlasSpectrum(NGPS):
         pl.xlim((3000., 10500.))
         pl.show()
 
+    def plot_s2n(self):
+        pl.clf()
+        for i in range(self.n_det):
+            s2n = self.det_flux[i] / self.det_noise[i]
+            pl.plot(self.det_waves[i], s2n, color=self.det_colors[i],
+                    label=self.det_bands[i])
+        pl.title("NGPS Simulated S/N for %s" % self.lamp)
+        pl.xlabel("Wavelength(A)")
+        pl.ylabel("Simulated S/N per px")
+        pl.legend()
+        pl.show()
+
     def plot_thrpt(self):
         pl.clf()
         for i in range(self.n_det):
