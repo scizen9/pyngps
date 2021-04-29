@@ -63,8 +63,9 @@ class AtlasSpectrum(NGPS):
     det_seg_slit = None
     det_seg_spot = None
     lamp = None
+    ymax = 0.
 
-    def __init__(self, lamp, verbose=False):
+    def __init__(self, lamp, calib=True, verbose=False):
 
         self.lamp = lamp
 
@@ -98,6 +99,12 @@ class AtlasSpectrum(NGPS):
               (len(self.waves),
                float(np.nanmin(self.waves)), float(np.nanmax(self.waves))))
         ff.close()
+
+        # get proper gain values
+        if calib:
+            gains = self.det_gain_cal
+        else:
+            gains = self.det_gain
 
         # get a resampled spectrum for each detector
         det_flux = []           # spectrum
@@ -195,13 +202,19 @@ class AtlasSpectrum(NGPS):
             if np.nanmax(flux) > max_flux:
                 max_flux = np.nanmax(flux)
 
+            # update gain in header
+            self.header["GAIN%d" % (idet+1)] = (gains[idet], 'e-/ADU')
+
         # normalize flux
-        flux_scale = 60000 / max_flux
+        flux_scale = 1.0
         for idet in range(self.n_det):
+            if (60000 * gains[idet]) > self.ymax:
+                self.ymax = (60000 * gains[idet])
+            flux_scale = (60000 * gains[idet]) / np.nanmax(det_flux[idet])
             det_flux[idet] *= flux_scale
             # apply noise
             det_flux[idet], noise = ngps_noise_model(det_flux[idet],
-                                                     self.det_gain[idet],
+                                                     gains[idet],
                                                      self.det_readnoise[idet])
             det_noise.append(noise)
 
@@ -229,7 +242,7 @@ class AtlasSpectrum(NGPS):
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Simulated DN")
         pl.legend()
-        pl.ylim((-200, 61000))
+        pl.ylim((-200, self.ymax))
         pl.xlim((3000., 10500.))
         pl.show()
 
