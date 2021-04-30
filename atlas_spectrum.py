@@ -22,11 +22,7 @@ def ngps_noise_model(spec, gain, rdnoise):
     """
 
     # Add Poisson noise first
-    vals = len(np.unique(spec))
-    vals = 2 ** np.ceil(np.log2(vals))
-    floor = np.nanmin(spec) + 1.0
-    bias_spec = spec + floor
-    noisy = np.random.poisson(bias_spec * vals) / float(vals) - floor
+    noisy = np.random.poisson(spec)
 
     # Add Read Noise
     mean = 0.
@@ -34,7 +30,7 @@ def ngps_noise_model(spec, gain, rdnoise):
     gauss = np.random.normal(mean, sigma, len(spec))
 
     # Calc noise
-    noise = np.sqrt(bias_spec) - np.sqrt(floor) + sigma
+    noise = np.sqrt(spec) + sigma
 
     return noisy + gauss, noise
 
@@ -56,6 +52,7 @@ class AtlasSpectrum(NGPS):
     native_dispersion = None
     det_flux = None
     det_noise = None
+    det_flux_with_noise = None
     det_waves = None
     det_thrpt = None
     det_res_pixels = None
@@ -109,7 +106,8 @@ class AtlasSpectrum(NGPS):
 
         # get a resampled spectrum for each detector
         det_flux = []           # spectrum
-        det_noise = []
+        det_noise = []          # noise
+        det_flux_with_noise = []  # pure spectrum
         det_waves = []          # wavelengths
         det_thrpt = []          # throughput
         det_seg_res = []        # seg resolution (pixels)
@@ -212,11 +210,12 @@ class AtlasSpectrum(NGPS):
             if (60000 * gains[idet]) > self.ymax:
                 self.ymax = (60000 * gains[idet])
             flux_scale = (60000 * gains[idet]) / np.nanmax(det_flux[idet])
-            det_flux[idet] *= flux_scale
+            scaled_flux = det_flux[idet] * flux_scale
+            det_flux[idet] = scaled_flux.astype(int)    # as raw data
             # apply noise
-            det_flux[idet], noise = ngps_noise_model(det_flux[idet],
-                                                     gains[idet],
-                                                     self.det_readnoise[idet])
+            noisy, noise = ngps_noise_model(det_flux[idet], gains[idet],
+                                            self.det_readnoise[idet])
+            det_flux_with_noise.append(noisy)
             det_noise.append(noise)
 
         self.flux *= (flux_scale / 5.0)     # scale for reference
@@ -224,6 +223,7 @@ class AtlasSpectrum(NGPS):
         # record results
         self.det_flux = det_flux
         self.det_noise = det_noise
+        self.det_flux_with_noise = det_flux_with_noise
         self.det_waves = det_waves
         self.det_thrpt = det_thrpt
         self.det_res_pixels = det_seg_res
@@ -232,13 +232,17 @@ class AtlasSpectrum(NGPS):
         self.det_seg_spot = det_seg_spot
 
     def plot_spec(self):
-        pl.clf()
         pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
                 label="Atlas")
         for i in range(self.n_det):
-            pl.errorbar(self.det_waves[i], self.det_flux[i],
+            pl.errorbar(self.det_waves[i], self.det_flux_with_noise[i],
                         yerr=self.det_noise[i], color=self.det_colors[i],
                         ecolor='black', label=self.det_bands[i], barsabove=True)
+            if i == 0:
+                pl.plot(self.det_waves[i], self.det_flux[i], color='black',
+                        ls='--', label="No Noise")
+            pl.plot(self.det_waves[i], self.det_flux[i],
+                    color=self.det_colors[i], ls='--')
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Simulated DN")
@@ -248,7 +252,6 @@ class AtlasSpectrum(NGPS):
         pl.show()
 
     def plot_s2n(self):
-        pl.clf()
         for i in range(self.n_det):
             s2n = self.det_flux[i] / self.det_noise[i]
             pl.plot(self.det_waves[i], s2n, color=self.det_colors[i],
@@ -260,7 +263,6 @@ class AtlasSpectrum(NGPS):
         pl.show()
 
     def plot_thrpt(self):
-        pl.clf()
         for i in range(self.n_det):
             pl.plot(self.det_waves[i], self.det_thrpt[i],
                     color=self.det_colors[i], label=self.det_bands[i])
@@ -271,7 +273,6 @@ class AtlasSpectrum(NGPS):
         pl.show()
 
     def plot_res(self):
-        pl.clf()
         for idet in range(self.n_det):
             pl.plot(self.det_seg_waves[idet], self.det_res_pixels[idet],
                     color=self.det_colors[idet], label=self.det_bands[idet])
