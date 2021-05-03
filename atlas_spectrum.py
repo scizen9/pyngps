@@ -1,5 +1,7 @@
 from astropy.io import fits as pf
 from scipy.ndimage import gaussian_filter1d
+from astropy.convolution import convolve, Gaussian1DKernel, Box1DKernel,\
+    Trapezoid1DKernel
 from scipy.interpolate import interpolate
 import numpy as np
 from numpy.polynomial.polynomial import polyval
@@ -21,8 +23,10 @@ def ngps_noise_model(spec, gain, rdnoise):
     :return: flux per pixel with noise
     """
 
+    # Only positive values
+    pos_spec = np.absolute(spec)
     # Add Poisson noise first
-    noisy = np.random.poisson(spec)
+    noisy = np.random.poisson(pos_spec)
 
     # Add Read Noise
     mean = 0.
@@ -30,7 +34,7 @@ def ngps_noise_model(spec, gain, rdnoise):
     gauss = np.random.normal(mean, sigma, len(spec))
 
     # Calc noise
-    noise = np.sqrt(spec) + sigma
+    noise = np.sqrt(pos_spec) + sigma
 
     return noisy + gauss, noise
 
@@ -62,7 +66,7 @@ class AtlasSpectrum(NGPS):
     lamp = None
     ymax = None
 
-    def __init__(self, lamp, calib=True, verbose=False):
+    def __init__(self, lamp, calib=True, kernel='box', verbose=False):
 
         self.lamp = lamp
         self.ymax = 0.
@@ -78,6 +82,10 @@ class AtlasSpectrum(NGPS):
         else:
             print("ERROR: Atlas spectrum not found for %s" % atpath)
             return
+
+        # check kernel
+        if 'gaussian' not in kernel.lower():
+            print('Warning: kernel will be identical at all wavelengths')
 
         # read in throughput and set wavelength scale
         self.read_thrpt()
@@ -169,7 +177,17 @@ class AtlasSpectrum(NGPS):
                     seg_waves.append((w0 + w1) / 2.)
 
                     # filter atlas spectrum to resolution
-                    spec = gaussian_filter1d(self.flux, res_pix)
+                    # get appropriate kernel for convolution
+                    if 'gaussian' in kernel.lower():
+                        con_kernel = Gaussian1DKernel(res_pix)
+                    elif 'trapazoid' in kernel.lower():
+                        con_kernel = Trapezoid1DKernel(round(res_pix), 0.75,
+                                                       mode='oversample')
+                    else:
+                        con_kernel = Box1DKernel(round(res_pix))
+
+                    spec = convolve(self.flux, con_kernel)
+                    # spec = gaussian_filter1d(self.flux, res_pix)
 
                     # make interpolation function
                     det_int = interpolate.interp1d(self.waves, spec,
