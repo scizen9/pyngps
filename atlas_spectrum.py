@@ -125,12 +125,17 @@ def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=False):
     d = sp.signal.convolve(grad, win, mode='same') / sum(win)
     # size
     nx = len(x)
+    # set up interpolation
+    x_interp = interpolate.interp1d(x, np.arange(nx), kind='cubic',
+                                    bounds_error=False,
+                                    fill_value='extrapolate')
     # set up windowing
     if not pkg:
         pkg = wid
     hgrp = int(pkg/2)
     hgt = []
     pks = []
+    pkx = []
     sgs = []
     # loop over spectrum
     # limits to avoid edges given pkg
@@ -156,26 +161,30 @@ def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=False):
                                 if verbose:
                                     print(i, t, x[i], res[1], x[t])
                             else:
+                                px = x_interp(res[1])
                                 hgt.append(res[0])
                                 pks.append(res[1])
+                                pkx.append(px)
                                 sgs.append(abs(res[2]))
                         except RuntimeError:
                             continue
     # clean by sigmas
     cvals = []
     cpks = []
+    cpkx = []
     sgmn = None
     if len(pks) > 0:
         cln_sgs, low, upp = sigmaclip(sgs, low=3., high=3.)
         for i in range(len(pks)):
             if low < sgs[i] < upp:
                 cpks.append(pks[i])
+                cpkx.append(pkx[i])
                 cvals.append(hgt[i])
         sgmn = cln_sgs.mean()
         # sgmd = float(np.nanmedian(cln_sgs))
     else:
         print("No peaks found!")
-    return cpks, sgmn, cvals
+    return cpks, sgmn, cvals, cpkx
     # END: findpeaks()
 
 
@@ -228,6 +237,7 @@ class AtlasSpectrum(NGPS):
     det_flux_with_noise = None
     det_waves = None
     det_peaks = None
+    det_peaks_pix = None
     det_thrpt = None
     det_res_pixels = None
     det_seg_waves = None
@@ -283,9 +293,9 @@ class AtlasSpectrum(NGPS):
         peak_width = 5.0
         slope_thresh = 0.07 * smooth_width / 2. / 100.
         ampl_thresh = 0.
-        at_cent, at_avwsg, at_hgt = findpeaks(self.waves, self.flux,
-                                              smooth_width, slope_thresh,
-                                              ampl_thresh, peak_width)
+        at_cent, at_avwsg, at_hgt, _ = findpeaks(self.waves, self.flux,
+                                                 smooth_width, slope_thresh,
+                                                 ampl_thresh, peak_width)
         self.peaks = at_cent
 
         # get proper gain values
@@ -299,7 +309,8 @@ class AtlasSpectrum(NGPS):
         det_noise = []          # noise
         det_flux_with_noise = []  # pure spectrum
         det_waves = []          # wavelengths
-        det_peaks = []          # arc line locations
+        det_peaks = []          # arc line locations (A)
+        det_peaks_pix = []      # arc line locations (px)
         det_thrpt = []          # throughput
         det_seg_res = []        # seg resolution (pixels)
         det_seg_waves = []      # seg waves (A)
@@ -424,11 +435,14 @@ class AtlasSpectrum(NGPS):
             peak_width = 7.0
             slope_thresh = 0.07 * smooth_width / 2. / 100.
             ampl_thresh = 0.
-            at_cent, at_avwsg, at_hgt = findpeaks(det_waves[idet],
-                                                  det_flux[idet],
-                                                  smooth_width, slope_thresh,
-                                                  ampl_thresh, peak_width)
+            at_cent, at_avwsg, at_hgt, at_pix = findpeaks(det_waves[idet],
+                                                          det_flux[idet],
+                                                          smooth_width,
+                                                          slope_thresh,
+                                                          ampl_thresh,
+                                                          peak_width)
             det_peaks.append(at_cent)
+            det_peaks_pix.append(at_pix)
 
         self.flux *= (flux_scale / 5.0)     # scale for reference
 
@@ -438,6 +452,7 @@ class AtlasSpectrum(NGPS):
         self.det_flux_with_noise = det_flux_with_noise
         self.det_waves = det_waves
         self.det_peaks = det_peaks
+        self.det_peaks_pix = det_peaks_pix
         self.det_thrpt = det_thrpt
         self.det_res_pixels = det_seg_res
         self.det_seg_waves = det_seg_waves
@@ -449,9 +464,12 @@ class AtlasSpectrum(NGPS):
         # result lists
         residual_wave = []
         residual_use = []
+        fit_pix = []
+        fit_wave = []
         # loop over detector
         for idet in range(self.n_det):
             lines = self.det_peaks[idet]
+            pixels = self.det_peaks_pix[idet]
             line_use = []
             line_delta_wave = []
             for iline, line_wave in enumerate(lines):
@@ -470,19 +488,20 @@ class AtlasSpectrum(NGPS):
                     # print(self.det_bands[idet], iline, del_lo, del_hi)
                 else:
                     # find nearest atlas line
-                    dws = [(w - line_wave)
-                           for w in self.peaks
-                           if abs(w - line_wave) < offset_limit]
-                    if len(dws) > 0:
+                    r = abs(np.asarray(self.peaks) - line_wave)
+                    t = r.argmin()
+                    if r[t] < offset_limit:
                         line_use.append(True)
-                        dws = np.asarray(dws).min()
-                        line_delta_wave.append(dws)
+                        line_delta_wave.append(self.peaks[t] - line_wave)
+                        fit_pix.append(pixels[iline])
+                        fit_wave.append(line_wave)
                     else:
                         line_use.append(False)
                         line_delta_wave.append(-100.)
                         # print(self.det_bands[idet], iline, " no lines")
             residual_use.append(line_use)
             residual_wave.append(line_delta_wave)
+            print("%s: nfit = %d" % (self.det_bands[idet], len(fit_pix)))
 
         self.residual_use = residual_use
         self.residual_wave = residual_wave
@@ -494,14 +513,16 @@ class AtlasSpectrum(NGPS):
             lw = list(compress(self.det_peaks[i], use))
             dw = list(compress(self.residual_wave[i], use))
             pl.scatter(lw, dw, marker='+', color=self.det_colors[i])
-            rms = np.nanstd(np.asarray(dw))
-            mean = np.nanmedian(np.asarray(dw))
+            rms = float(np.nanstd(np.asarray(dw)))
+            mean = float(np.nanmedian(np.asarray(dw)))
+            print("%s: %.3f +- %.3f (A)" % (self.det_bands[i], mean, rms))
             pl.hlines(y=mean, xmin=waves[0], xmax=waves[-1],
                       color=self.det_colors[i])
             pl.hlines(y=mean + rms, xmin=waves[0], xmax=waves[-1],
                       color=self.det_colors[i], ls='--')
             pl.hlines(y=mean - rms, xmin=waves[0], xmax=waves[-1],
                       color=self.det_colors[i], ls='--')
+            pl.axhline(ls='dotted', color='gray', alpha=0.5)
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Atlas residual (A)")
