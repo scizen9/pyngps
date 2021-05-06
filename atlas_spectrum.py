@@ -3,12 +3,181 @@ from scipy.ndimage import gaussian_filter1d
 from astropy.convolution import convolve, Gaussian1DKernel, Box1DKernel,\
     Trapezoid1DKernel
 from scipy.interpolate import interpolate
+from scipy.signal.windows import boxcar
+from scipy.optimize import curve_fit
+from scipy.stats import sigmaclip
 import numpy as np
+import scipy as sp
 from numpy.polynomial.polynomial import polyval
 from ngps import NGPS
 import pkg_resources
 import os
 import matplotlib.pyplot as pl
+
+
+def gaus(x, a, mu, sigma):
+    """Gaussian fitting function"""
+    return a * np.exp(-(x - mu) ** 2 / (2. * sigma ** 2))
+
+
+def get_line_window(y, c, thresh=0., verbose=False, strict=False):
+    """Find a window that includes the fwhm of the line"""
+    nx = len(y)
+    # check edges
+    if c < 2 or c > nx - 2:
+        if verbose:
+            print("input center too close to edge")
+        return None, None, 0
+    # get initial values
+    x0 = c - 2
+    x1 = c + 2
+    mx = np.nanmax(y[x0:x1+1])
+    count = 5
+    # check low side
+    if x0 - 1 < 0:
+        if verbose:
+            print("max check: low edge hit")
+        return None, None, 0
+    while y[x0-1] > mx:
+        x0 -= 1
+        count += 1
+        if x0 - 1 < 0:
+            if verbose:
+                print("Max check: low edge hit")
+            return None, None, 0
+
+    # check high side
+    if x1 + 1 >= nx:
+        if verbose:
+            print("max check: high edge hit")
+        return None, None, 0
+    while y[x1+1] > mx:
+        x1 += 1
+        count += 1
+        if x1 + 1 >= nx:
+            if verbose:
+                print("Max check: high edge hit")
+            return None, None, 0
+    # adjust starting window to center on max
+    cmx = x0 + y[x0:x1+1].argmax()
+    x0 = cmx - 2
+    x1 = cmx + 2
+    mx = np.nanmax(y[x0:x1 + 1])
+    # make sure max is high enough
+    if mx < thresh:
+        return None, None, 0
+    #
+    # expand until we get to half max
+    hmx = mx * 0.5
+    #
+    # Low index side
+    prev = mx
+    while y[x0] > hmx:
+        if y[x0] > mx or x0 <= 0 or y[x0] > prev:
+            if verbose:
+                if y[x0] > mx:
+                    print("hafmax check: low index err - missed max")
+                if x0 <= 0:
+                    print("hafmax check: low index err - at edge")
+                if y[x0] > prev:
+                    print("hafmax check: low index err - wiggly")
+            return None, None, 0
+        prev = y[x0]
+        x0 -= 1
+        count += 1
+    # High index side
+    prev = mx
+    while y[x1] > hmx:
+        if y[x1] > mx or x1 >= nx or y[x1] > prev:
+            if verbose:
+                if y[x1] > mx:
+                    print("hafmax check: high index err - missed max")
+                if x1 >= nx:
+                    print("hafmax check: high index err - at edge")
+                if y[x1] > prev:
+                    print("hafmax check: high index err - wiggly")
+            return None, None, 0
+        prev = y[x1]
+        if x1 < (nx-1):
+            x1 += 1
+            count += 1
+        else:
+            if verbose:
+                print("Edge encountered")
+            return None, None, 0
+    if strict:
+        # where did we end up?
+        if c < x0 or x1 < c:
+            if verbose:
+                print("initial position outside final window")
+            return None, None, 0
+
+    return x0, x1, count
+    # END: get_line_window()
+
+
+def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=True):
+    """Find peaks in spectrum"""
+    # derivative
+    grad = np.gradient(y)
+    # smooth derivative
+    win = boxcar(wid)
+    d = sp.signal.convolve(grad, win, mode='same') / sum(win)
+    # size
+    nx = len(x)
+    # set up windowing
+    if not pkg:
+        pkg = wid
+    hgrp = int(pkg/2)
+    print("hgrp: %d" % hgrp)
+    hgt = []
+    pks = []
+    sgs = []
+    # loop over spectrum
+    # limits to avoid edges given pkg
+    for i in np.arange(pkg, (nx - pkg), dtype=int):
+        # find zero crossings
+        if np.sign(d[i]) > np.sign(d[i+1]):
+            # pass slope threshhold?
+            if (d[i] - d[i+1]) > sth * y[i]:
+                # pass amplitude threshhold?
+                if y[i] > ath or y[i+1] > ath:
+                    # get subvectors around peak in window
+                    xx = x[(i-hgrp):(i+hgrp+1)]
+                    yy = y[(i-hgrp):(i+hgrp+1)]
+                    if len(yy) > 3:
+                        try:
+                            # gaussian fit
+                            res, _ = curve_fit(gaus, xx, yy,
+                                               p0=[y[i], x[i], 1.])
+                            # check offset of fit from initial peak
+                            r = abs(x - res[1])
+                            t = r.argmin()
+                            if abs(i - t) > pkg:
+                                if verbose:
+                                    print(i, t, x[i], res[1], x[t])
+                            else:
+                                hgt.append(res[0])
+                                pks.append(res[1])
+                                sgs.append(abs(res[2]))
+                        except RuntimeError:
+                            continue
+    # clean by sigmas
+    cvals = []
+    cpks = []
+    sgmn = None
+    if len(pks) > 0:
+        cln_sgs, low, upp = sigmaclip(sgs, low=3., high=3.)
+        for i in range(len(pks)):
+            if low < sgs[i] < upp:
+                cpks.append(pks[i])
+                cvals.append(hgt[i])
+        sgmn = cln_sgs.mean()
+        # sgmd = float(np.nanmedian(cln_sgs))
+    else:
+        print("No peaks found!")
+    return cpks, sgmn, cvals
+    # END: findpeaks()
 
 
 def ngps_noise_model(spec, gain, rdnoise):
@@ -53,6 +222,7 @@ class AtlasSpectrum(NGPS):
     flux = None
     waves = None
     header = None
+    peaks = None
     native_dispersion = None
     det_flux = None
     det_noise = None
@@ -105,6 +275,16 @@ class AtlasSpectrum(NGPS):
               (len(self.waves),
                float(np.nanmin(self.waves)), float(np.nanmax(self.waves))))
         ff.close()
+
+        # get line list
+        smooth_width = 4
+        peak_width = 5.0
+        slope_thresh = 0.07 * smooth_width / 2. / 100.
+        ampl_thresh = 0.
+        at_cent, at_avwsg, at_hgt = findpeaks(self.waves, self.flux,
+                                              smooth_width, slope_thresh,
+                                              ampl_thresh, peak_width)
+        self.peaks = at_cent
 
         # get proper gain values
         if calib:
@@ -252,6 +432,7 @@ class AtlasSpectrum(NGPS):
     def plot_spec(self):
         pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
                 label="Atlas")
+        pl.plot(self.peaks, np.zeros(len(self.peaks)), 'g+')
         for i in range(self.n_det):
             pl.errorbar(self.det_waves[i], self.det_flux_with_noise[i],
                         yerr=self.det_noise[i], color=self.det_colors[i],
