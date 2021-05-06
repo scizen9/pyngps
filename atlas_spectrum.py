@@ -116,7 +116,7 @@ def get_line_window(y, c, thresh=0., verbose=False, strict=False):
     # END: get_line_window()
 
 
-def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=True):
+def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=False):
     """Find peaks in spectrum"""
     # derivative
     grad = np.gradient(y)
@@ -129,7 +129,6 @@ def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=True):
     if not pkg:
         pkg = wid
     hgrp = int(pkg/2)
-    print("hgrp: %d" % hgrp)
     hgt = []
     pks = []
     sgs = []
@@ -228,6 +227,7 @@ class AtlasSpectrum(NGPS):
     det_noise = None
     det_flux_with_noise = None
     det_waves = None
+    det_peaks = None
     det_thrpt = None
     det_res_pixels = None
     det_seg_waves = None
@@ -235,6 +235,8 @@ class AtlasSpectrum(NGPS):
     det_seg_spot = None
     lamp = None
     ymax = None
+    residual_wave = None
+    residual_use = None
 
     def __init__(self, lamp, calib=True, kernel='box', verbose=False):
 
@@ -297,6 +299,7 @@ class AtlasSpectrum(NGPS):
         det_noise = []          # noise
         det_flux_with_noise = []  # pure spectrum
         det_waves = []          # wavelengths
+        det_peaks = []          # arc line locations
         det_thrpt = []          # throughput
         det_seg_res = []        # seg resolution (pixels)
         det_seg_waves = []      # seg waves (A)
@@ -310,6 +313,7 @@ class AtlasSpectrum(NGPS):
             # get model wavelength scale
             det_pix = np.arange(0, self.detector_npix[idet])
             waves = polyval(det_pix, self.detector_disp_coeffs[idet])
+            waves.sort()
             det_waves.append(waves)
             flux = waves.copy()
 
@@ -415,6 +419,16 @@ class AtlasSpectrum(NGPS):
                                             self.det_readnoise[idet])
             det_flux_with_noise.append(noisy)
             det_noise.append(noise)
+            # get line list
+            smooth_width = 6
+            peak_width = 7.0
+            slope_thresh = 0.07 * smooth_width / 2. / 100.
+            ampl_thresh = 0.
+            at_cent, at_avwsg, at_hgt = findpeaks(det_waves[idet],
+                                                  det_flux[idet],
+                                                  smooth_width, slope_thresh,
+                                                  ampl_thresh, peak_width)
+            det_peaks.append(at_cent)
 
         self.flux *= (flux_scale / 5.0)     # scale for reference
 
@@ -423,20 +437,88 @@ class AtlasSpectrum(NGPS):
         self.det_noise = det_noise
         self.det_flux_with_noise = det_flux_with_noise
         self.det_waves = det_waves
+        self.det_peaks = det_peaks
         self.det_thrpt = det_thrpt
         self.det_res_pixels = det_seg_res
         self.det_seg_waves = det_seg_waves
         self.det_seg_slit = det_seg_slit
         self.det_seg_spot = det_seg_spot
 
+    def analyze(self, neighbor_limit=1.0, offset_limit=0.5):
+        """Perform residual analysis"""
+        # result lists
+        residual_wave = []
+        residual_use = []
+        # loop over detector
+        for idet in range(self.n_det):
+            lines = self.det_peaks[idet]
+            line_use = []
+            line_delta_wave = []
+            for iline, line_wave in enumerate(lines):
+                # check for neighbors
+                if iline > 0:
+                    del_lo = line_wave - lines[(iline-1)]
+                else:
+                    del_lo = 100.
+                if iline < (len(lines) - 1):
+                    del_hi = lines[(iline+1)] - line_wave
+                else:
+                    del_hi = 100.
+                if del_lo < neighbor_limit or del_hi < neighbor_limit:
+                    line_use.append(False)
+                    line_delta_wave.append(-100.)
+                    # print(self.det_bands[idet], iline, del_lo, del_hi)
+                else:
+                    # find nearest atlas line
+                    dws = [(w - line_wave)
+                           for w in self.peaks
+                           if abs(w - line_wave) < offset_limit]
+                    if len(dws) > 0:
+                        line_use.append(True)
+                        dws = np.asarray(dws).min()
+                        line_delta_wave.append(dws)
+                    else:
+                        line_use.append(False)
+                        line_delta_wave.append(-100.)
+                        # print(self.det_bands[idet], iline, " no lines")
+            residual_use.append(line_use)
+            residual_wave.append(line_delta_wave)
+
+        self.residual_use = residual_use
+        self.residual_wave = residual_wave
+        from itertools import compress
+
+        for i in range(self.n_det):
+            waves = self.det_waves[i]
+            use = self.residual_use[i]
+            lw = list(compress(self.det_peaks[i], use))
+            dw = list(compress(self.residual_wave[i], use))
+            pl.scatter(lw, dw, marker='+', color=self.det_colors[i])
+            rms = np.nanstd(np.asarray(dw))
+            mean = np.nanmedian(np.asarray(dw))
+            pl.hlines(y=mean, xmin=waves[0], xmax=waves[-1],
+                      color=self.det_colors[i])
+            pl.hlines(y=mean + rms, xmin=waves[0], xmax=waves[-1],
+                      color=self.det_colors[i], ls='--')
+            pl.hlines(y=mean - rms, xmin=waves[0], xmax=waves[-1],
+                      color=self.det_colors[i], ls='--')
+        pl.title("NGPS Simulated %s" % self.lamp)
+        pl.xlabel("Wavelength(A)")
+        pl.ylabel("Atlas residual (A)")
+        pl.show()
+
     def plot_spec(self):
         pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
                 label="Atlas")
-        pl.plot(self.peaks, np.zeros(len(self.peaks)), 'g+')
+        pl.scatter(self.peaks, np.zeros(len(self.peaks)), marker='+',
+                   alpha=0.5, color='gray')
         for i in range(self.n_det):
             pl.errorbar(self.det_waves[i], self.det_flux_with_noise[i],
                         yerr=self.det_noise[i], color=self.det_colors[i],
                         ecolor='black', label=self.det_bands[i], barsabove=True)
+            pl.scatter(self.det_peaks[i],
+                       np.zeros(len(self.det_peaks[i])) - 50,
+                       marker='x', color=self.det_colors[i])
             if i == 0:
                 pl.plot(self.det_waves[i], self.det_flux[i], color='black',
                         ls='--', label="No Noise")
