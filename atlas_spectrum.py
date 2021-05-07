@@ -247,6 +247,7 @@ class AtlasSpectrum(NGPS):
     ymax = None
     residual_wave = None
     residual_use = None
+    residual_s2n = None
 
     def __init__(self, lamp, calib=True, kernel='box', verbose=False):
 
@@ -464,12 +465,15 @@ class AtlasSpectrum(NGPS):
         # result lists
         residual_wave = []
         residual_use = []
+        residual_s2n = []
         # loop over detector
         for idet in range(self.n_det):
             lines = self.det_peaks[idet]
             pixels = self.det_peaks_pix[idet]
+            s2n = self.det_flux[idet] / self.det_noise[idet]
             line_use = []
             line_delta_wave = []
+            line_s2n = []
             fit_pix = []
             fit_wave = []
             for iline, line_wave in enumerate(lines):
@@ -485,6 +489,7 @@ class AtlasSpectrum(NGPS):
                 if del_lo < neighbor_limit or del_hi < neighbor_limit:
                     line_use.append(False)
                     line_delta_wave.append(-100.)
+                    line_s2n.append(-100.)
                     # print(self.det_bands[idet], iline, del_lo, del_hi)
                 else:
                     # find nearest atlas line
@@ -495,12 +500,18 @@ class AtlasSpectrum(NGPS):
                         line_delta_wave.append(self.peaks[t] - line_wave)
                         fit_pix.append(pixels[iline])
                         fit_wave.append(self.peaks[t])
+                        ipx = int(pixels[iline])
+                        ls2n = np.nanmax(s2n[ipx - 2:ipx + 3])
+                        # ls2n = s2n[ipx]
+                        line_s2n.append(ls2n)
                     else:
                         line_use.append(False)
                         line_delta_wave.append(-100.)
+                        line_s2n.append(-100.)
                         # print(self.det_bands[idet], iline, " no lines")
             residual_use.append(line_use)
             residual_wave.append(line_delta_wave)
+            residual_s2n.append(line_s2n)
             if do_fit:
                 wfit = np.polyfit(fit_pix, fit_wave, 5)
                 pwfit = np.poly1d(wfit)
@@ -525,6 +536,7 @@ class AtlasSpectrum(NGPS):
 
         self.residual_use = residual_use
         self.residual_wave = residual_wave
+        self.residual_s2n = residual_s2n
         from itertools import compress
 
         for i in range(self.n_det):
@@ -546,6 +558,16 @@ class AtlasSpectrum(NGPS):
         pl.title("NGPS Simulated %s" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Atlas residual (A)")
+        pl.show()
+
+        for i in range(self.n_det):
+            use = self.residual_use[i]
+            resid = list(compress(self.residual_wave[i], use))
+            s2n = list(compress(self.residual_s2n[i], use))
+            pl.scatter(resid, s2n, marker='+', color=self.det_colors[i])
+        pl.title("NGPS Simulated %s" % self.lamp)
+        pl.xlabel("Resid (A)")
+        pl.ylabel("Signal / Noise")
         pl.show()
 
     def plot_spec(self):
