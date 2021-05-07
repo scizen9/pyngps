@@ -161,7 +161,7 @@ def findpeaks(x, y, wid, sth, ath, pkg=None, verbose=False):
                                 if verbose:
                                     print(i, t, x[i], res[1], x[t])
                             else:
-                                px = x_interp(res[1])
+                                px = float(x_interp(res[1]))
                                 hgt.append(res[0])
                                 pks.append(res[1])
                                 pkx.append(px)
@@ -459,19 +459,19 @@ class AtlasSpectrum(NGPS):
         self.det_seg_slit = det_seg_slit
         self.det_seg_spot = det_seg_spot
 
-    def analyze(self, neighbor_limit=1.0, offset_limit=0.5):
+    def analyze(self, neighbor_limit=1.0, offset_limit=0.5, do_fit=False):
         """Perform residual analysis"""
         # result lists
         residual_wave = []
         residual_use = []
-        fit_pix = []
-        fit_wave = []
         # loop over detector
         for idet in range(self.n_det):
             lines = self.det_peaks[idet]
             pixels = self.det_peaks_pix[idet]
             line_use = []
             line_delta_wave = []
+            fit_pix = []
+            fit_wave = []
             for iline, line_wave in enumerate(lines):
                 # check for neighbors
                 if iline > 0:
@@ -494,14 +494,34 @@ class AtlasSpectrum(NGPS):
                         line_use.append(True)
                         line_delta_wave.append(self.peaks[t] - line_wave)
                         fit_pix.append(pixels[iline])
-                        fit_wave.append(line_wave)
+                        fit_wave.append(self.peaks[t])
                     else:
                         line_use.append(False)
                         line_delta_wave.append(-100.)
                         # print(self.det_bands[idet], iline, " no lines")
             residual_use.append(line_use)
             residual_wave.append(line_delta_wave)
-            print("%s: nfit = %d" % (self.det_bands[idet], len(fit_pix)))
+            if do_fit:
+                wfit = np.polyfit(fit_pix, fit_wave, 5)
+                pwfit = np.poly1d(wfit)
+                arc_wave_fit = pwfit(fit_pix)
+                # residuals
+                resid = arc_wave_fit - fit_wave
+                resid_c, low, upp = sigmaclip(resid, low=3., high=3.)
+                wsig = resid_c.std()
+                max_resid = np.max(abs(resid))
+                print("%s: nfit = %d, wsig = %.3f, max_resid = %.3f" %
+                      (self.det_bands[idet], len(fit_pix), wsig, max_resid))
+                pl.axhline(color='gray', alpha=0.5, ls='--')
+                pl.scatter(fit_wave, resid, marker='+',
+                           color=self.det_colors[idet],
+                           label=self.det_bands[idet])
+                pl.title("NGPS Simulated %s" % self.lamp)
+                pl.xlabel("Wavelength(A)")
+                pl.ylabel("Fit residual (A)")
+        if do_fit:
+            pl.legend()
+            pl.show()
 
         self.residual_use = residual_use
         self.residual_wave = residual_wave
