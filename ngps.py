@@ -14,6 +14,7 @@ class NGPS:
     det_readnoise = [2.5, 3.5, 3.5, 3.5]
     det_gain = [1., 1., 1., 1.]
     det_gain_cal = [2.5, 2.5, 2.5, 2.5]
+    det_s2n_limits = [100., 100., 70., 17.]
 
     detector_wave_limits = [[3100., 4360.], [4170., 5900.],
                             [5610., 7940.], [7560., 10400.]]
