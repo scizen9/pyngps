@@ -2,7 +2,7 @@ from astropy.io import fits as pf
 # from scipy.ndimage import gaussian_filter1d
 from astropy.convolution import convolve, Gaussian1DKernel, Box1DKernel,\
     Trapezoid1DKernel
-from scipy.interpolate import interpolate
+from scipy.interpolate import interpolate, UnivariateSpline
 from scipy.signal.windows import boxcar
 from scipy.optimize import curve_fit
 from scipy.stats import sigmaclip
@@ -542,7 +542,7 @@ class AtlasSpectrum(NGPS):
                 wsig = resid_c.std()
                 wmen = resid_c.mean()
                 vsig = resid_vel_c.std()
-                vmen = resid_vel_c.mean()
+                # vmen = resid_vel_c.mean()
                 wsig_pix = wsig / self.native_dispersion
                 print("%s: nfit = %3d, mean = %+.3f, "
                       "wsig = %.3f (A) = %.3f (px), Vsig = %.3f (km/s)" %
@@ -563,7 +563,7 @@ class AtlasSpectrum(NGPS):
             pl.legend()
             pl.show()
 
-    def fit_arc(self, fit_order=5, s2n_cut=False, fit_iter=1):
+    def fit_arc(self, fit_order=5, s2n_cut=False, do_poly=True, smoo=0.5):
         """Perform residual analysis"""
         if self.det_lines_use is None:
             print("Run analyze function first")
@@ -588,10 +588,15 @@ class AtlasSpectrum(NGPS):
             fit_wave = list(compress(lines, use))
 
             # do wavelength fit
-            wfit = np.polyfit(fit_pix, fit_wave, fit_order)
-            pwfit = np.poly1d(wfit)
-            arc_wave_fit = pwfit(fit_pix)
-            all_lines_fit = pwfit(pixels)
+            if do_poly:
+                wfit = np.polyfit(fit_pix, fit_wave, fit_order)
+                pwfit = np.poly1d(wfit)
+                arc_wave_fit = pwfit(fit_pix)
+                all_lines_fit = pwfit(pixels)
+            else:
+                wfit = UnivariateSpline(fit_pix, fit_wave, s=smoo, k=fit_order)
+                arc_wave_fit = wfit(fit_pix)
+                all_lines_fit = wfit(pixels)
             # residuals
             all_resid = np.asarray(all_lines_fit) - np.asarray(lines)
             resid = arc_wave_fit - fit_wave
@@ -601,7 +606,7 @@ class AtlasSpectrum(NGPS):
             wmen = resid_c.mean()
             resid_vel_c, vlow, vupp = sigmaclip(resid_vel, low=3., high=3.)
             vsig = resid_vel_c.std()
-            vmen = resid_vel_c.mean()
+            # vmen = resid_vel_c.mean()
             wsig_pix = wsig / self.detector_dispersions[idet]
             print("%s: nfit = %3d, mean = %+.3f, wsig = %.3f (A) = %.3f (px), "
                   "Vsig = %.3f (km/s)" %
@@ -633,7 +638,7 @@ class AtlasSpectrum(NGPS):
         pl.legend()
         pl.show()
 
-    def analyze(self, neighbor_limit=1.0, offset_limit=0.5):
+    def analyze(self, neighbor_limit=1.0, offset_limit=0.5, do_plot=False):
         """Perform residual analysis"""
 
         # result lists
@@ -701,6 +706,9 @@ class AtlasSpectrum(NGPS):
         self.det_lines_ref = det_lines_ref
         self.det_lines_dw = det_lines_dw
         self.det_lines_dvel = det_lines_dvel
+
+        if not do_plot:
+            return
 
         for i in range(self.n_det):
             w0 = self.detector_wave_limits[i][0]
