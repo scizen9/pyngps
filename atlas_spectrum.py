@@ -330,7 +330,8 @@ class AtlasSpectrum(NGPS):
             waves = polyval(det_pix, self.detector_disp_coeffs[idet])
             waves.sort()
             det_waves.append(waves)
-            flux = waves.copy()
+            # flux = waves.copy()
+            flux = np.zeros((len(waves)))
 
             # make interpolation function
             thrpt_int = interpolate.interp1d(thrpt_waves, self.thrpt[:, idet+1],
@@ -401,6 +402,18 @@ class AtlasSpectrum(NGPS):
                                                    bounds_error=False,
                                                    fill_value='extrapolate')
 
+                    # check limits
+                    if w0 < np.nanmin(self.waves):
+                        if verbose:
+                            print("Adjusting w0: %.2f -> %.2f" %
+                                  (w0, float(np.nanmin(self.waves))))
+                        w0 = float(np.nanmin(self.waves))
+                    if w1 > np.nanmax(self.waves):
+                        if verbose:
+                            print("Adjusting w1: %.2f -> %.2f" %
+                                  (w1, float(np.nanmax(self.waves))))
+                        w1 = float(np.nanmax(self.waves))
+
                     # segment pixels
                     seg_pix = [k for k, w in enumerate(waves) if w0 <= w <= w1]
 
@@ -456,12 +469,25 @@ class AtlasSpectrum(NGPS):
                                                           peak_width)
             det_lines_peak.append(at_cent)
             det_lines_pix.append(at_pix)
+            # add to header
+            self.header['FLXSCL%d' % (idet+1)] = (flux_scale, 'Scale fact')
+            # report
+            if verbose:
+                print("for %s band found %d lines" % (self.det_bands[idet],
+                                                      len(at_cent)))
 
         self.flux *= (flux_scale / 5.0)     # scale for reference
 
         # get atlas line observations
         smooth_width = 4
-        peak_width = 5.0
+        # are we an etalon?
+        if 'ETALON' in self.header:
+            if self.header['ETALON']:
+                peak_width = 20.0
+            else:
+                peak_width = 5.0
+        else:
+            peak_width = 5.0
         slope_thresh = 0.07 * smooth_width / 2. / 100.
         ampl_thresh = 0.
         if verbose:
@@ -501,6 +527,7 @@ class AtlasSpectrum(NGPS):
             self.amplitude = obs_amp
         else:
             print("Atlas line list not found: %s" % lipath)
+            self.lines = at_cent
             self.peaks = at_cent
             self.pixels = at_pix
             self.amplitude = at_hgt
