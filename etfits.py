@@ -37,6 +37,7 @@ def etfits(csv_file=None, fits_file='et.fits', do_plot=False):
     hdu.header['CDELT1'] = dw
     hdu.header['CRVAL1'] = w0
     hdu.header['OFNAME'] = csv_file
+    hdu.header['ETALON'] = True
     hdu.writeto(fits_file)
     print("created %s" % fits_file)
     return
