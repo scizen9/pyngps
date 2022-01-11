@@ -256,6 +256,32 @@ class AtlasSpectrum(NGPS):
     ymax = None
 
     def __init__(self, lamp, calib=True, kernel='box', verbose=False):
+        """Initialize NGPS simulated calibration observation
+
+        When this is complete, the class contains:
+        flux  - input atlas spectrum flux
+        waves - input atlas spectrum wavelengths
+        header - input atlas spectrum fits header
+        lines - line list wavelengths that match observed atlas lines
+        peaks - observed atlas line wavelengths
+        pixels - observed atlas line pixel positions
+        amplitude - observed atlas line heights (for plotting)
+
+        The following items have 4 entries, one per detector:
+        det_flux - simulated arc flux
+        det_noise - simulated noise in flux units
+        det_flux_with_noise - flux and noise combination
+        det_waves - simulated wavelengths
+        det_lines_peak - observed simulated arc line peak wavelengths
+        det_lines_pix - observed simulated arc line peak pixel positions
+        det_thrpt - throughput function
+
+        The following items are for the optical model segments:
+        det_res_pixels - slit and spot sizes added in quadrature
+        det_seg_waves - wavelength of each det segment
+        det_seg_slit - slit resolution for each segment
+        det_set_spot - spot resolution for each segment
+        """
 
         self.lamp = lamp
         self.ymax = 0.
@@ -305,7 +331,7 @@ class AtlasSpectrum(NGPS):
         else:
             gains = self.det_gain
 
-        # get a resampled spectrum for each detector
+        # get a simulated spectrum for each detector
         det_flux = []           # spectrum
         det_noise = []          # noise
         det_flux_with_noise = []  # pure spectrum
@@ -443,6 +469,9 @@ class AtlasSpectrum(NGPS):
             # update gain in header
             self.header["GAIN%d" % (idet+1)] = (gains[idet], 'e-/ADU')
 
+        # We now have a simulated NGPS arc spectrum for each detector
+        # Now we find peaks so we can simulate a wavelength solution
+
         # normalize flux and get peaks
         flux_scale = 1.0
         for idet in range(self.n_det):
@@ -478,7 +507,10 @@ class AtlasSpectrum(NGPS):
 
         self.flux *= (flux_scale / 5.0)     # scale for reference
 
-        # get atlas line observations
+        # We now have arc line pixel positions and wavelengths from
+        # simulated NGPS arc spectrum
+
+        # Now get observed atlas lines (non-NGPS)
         smooth_width = 4
         # are we an etalon?
         if 'ETALON' in self.header:
@@ -546,7 +578,13 @@ class AtlasSpectrum(NGPS):
         self.det_seg_spot = det_seg_spot
 
     def fit_atlas(self, fit_order=5):
-        """Perform residual analysis"""
+        """Perform residual analysis using atlas observed lines: non-NGPS
+
+        This is a limit on how accurate we can get, given that the atlas
+        was taken at R ~ 40,000.  This is not using the NGPS optical
+        prescription, only the detector limits for plotting.
+
+        """
         # fit atlas lines
         if self.lines is not None:
             lines = np.asarray(self.lines)
@@ -591,7 +629,7 @@ class AtlasSpectrum(NGPS):
             pl.show()
 
     def fit_arc(self, fit_order=5, s2n_cut=False, do_poly=True, smoo=0.5):
-        """Perform residual analysis"""
+        """Perform residual analysis using NGPS simulated arc observations"""
         if self.det_lines_use is None:
             print("Run analyze function first")
             return
@@ -600,6 +638,9 @@ class AtlasSpectrum(NGPS):
         for idet in range(self.n_det):
             w0 = self.detector_wave_limits[idet][0]
             w1 = self.detector_wave_limits[idet][1]
+            wc = self.detector_central_waves[idet]
+            kms_err = wc * 1. / 299792.
+            r10_err = wc / 10000.
             lines = self.det_lines_ref[idet]
             pixels = self.det_lines_pix[idet]
             s2n = self.det_lines_s2n[idet]
@@ -644,8 +685,8 @@ class AtlasSpectrum(NGPS):
                 if all_resid[il] < low or all_resid[il] > upp:
                     use[il] = False
 
-            pl.scatter(lines, all_resid, marker='o', alpha=0.3,
-                       color=self.det_colors[idet])
+            # pl.scatter(lines, all_resid, marker='o', alpha=0.3,
+            #            color=self.det_colors[idet])
             pl.scatter(fit_wave, resid, marker='+',
                        color=self.det_colors[idet], label=self.det_bands[idet])
             pl.hlines(y=wmen, xmin=np.min(fit_wave), xmax=np.max(fit_wave),
@@ -658,15 +699,38 @@ class AtlasSpectrum(NGPS):
                       color=self.det_colors[idet], ls='--')
             pl.hlines(y=low, xmin=w0, xmax=w1, color=self.det_colors[idet],
                       ls='dotted')
+            if idet == 0:
+                pl.errorbar([wc], [-0.5], yerr=kms_err, color='black',
+                            ecolor='black', label='1 km/s', capsize=5)
+            else:
+                pl.errorbar([wc], [-0.5], yerr=kms_err, color='black',
+                            ecolor='black', capsize=5)
+            if idet == 1:
+                pl.errorbar([wc], [0.0], yerr=r10_err, color='cyan',
+                            ecolor='cyan', label='R=10,000', capsize=5)
+        if do_poly:
+            fit_type = "Poly[%d]" % fit_order
+        else:
+            fit_type = "Spline[%d]" % fit_order
         pl.axhline(color='gray', alpha=0.5, ls='--')
-        pl.title("NGPS Simulated %s" % self.lamp)
+        pl.title("NGPS Simulated %s %s fit" % (self.lamp, fit_type))
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Fit residual (A)")
+        pl.ylim([-0.75, 0.75])
         pl.legend()
         pl.show()
 
     def analyze(self, neighbor_limit=1.0, offset_limit=0.5, do_plot=False):
-        """Perform residual analysis"""
+        """Perform residual analysis
+
+        This function accumulates the data that are used to perform fitting.
+        The following items are produced:
+        det_lines_ref - catalog line wavelengths that pass criteria
+        det_lines_use - which lines pass criteria
+        det_lines_s2n - signal-to-noise for possible s2n cut
+        det_lines_dw - delta wavelength between catalog and observed line
+        det_lines_dvel - delta velocity between catalog and observed line
+        """
 
         # result lists
         det_lines_ref = []
@@ -714,7 +778,7 @@ class AtlasSpectrum(NGPS):
                         line_use.append(True)
                         line_ref.append(self.lines[t])
                         line_dw.append(self.lines[t] - line_wave)
-                        line_dvel.append(300000. * line_dw[-1] / self.lines[t])
+                        line_dvel.append(299792. * line_dw[-1] / self.lines[t])
                     else:
                         # no matching atlas line within offset limit
                         line_use.append(False)
@@ -756,7 +820,7 @@ class AtlasSpectrum(NGPS):
             pl.hlines(y=mean - rms, xmin=w0, xmax=w1, color=self.det_colors[i],
                       ls='--')
             pl.axhline(ls='dotted', color='gray', alpha=0.5)
-        pl.title("NGPS Simulated %s" % self.lamp)
+        pl.title("Observed vs. Catalog %s atlas spec" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Atlas residual (A)")
         pl.legend()
@@ -780,14 +844,14 @@ class AtlasSpectrum(NGPS):
             pl.hlines(y=mean - rms, xmin=w0, xmax=w1, color=self.det_colors[i],
                       ls='--')
             pl.axhline(ls='dotted', color='gray', alpha=0.5)
-        pl.title("NGPS Simulated %s" % self.lamp)
+        pl.title("Observed vs. Catalog %s atlas spec" % self.lamp)
         pl.xlabel("Wavelength(A)")
         pl.ylabel("Atlas residual (km/s)")
         pl.legend()
         pl.show()
 
         fig, ((ax1, ax2), (ax3, ax4)) = pl.subplots(2, 2)
-        fig.suptitle("NGPS Simulated %s" % self.lamp)
+        fig.suptitle("Observed vs. Catalog %s atlas spec" % self.lamp)
         for i, ax in enumerate([ax1, ax2, ax3, ax4]):
             use = self.det_lines_use[i]
             resid = list(compress(self.det_lines_dw[i], use))
