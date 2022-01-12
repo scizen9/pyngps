@@ -254,6 +254,8 @@ class AtlasSpectrum(NGPS):
     det_seg_spot = None
     lamp = None
     ymax = None
+    neighbor_limit = None
+    offset_limit = None
 
     def __init__(self, lamp, calib=True, kernel='box', verbose=False):
         """Initialize NGPS simulated calibration observation
@@ -628,6 +630,41 @@ class AtlasSpectrum(NGPS):
             pl.legend()
             pl.show()
 
+    def plot_arc(self):
+        """Plot only matched lines in arc spectrum"""
+        if self.det_lines_use is None:
+            print("Run analyze function first")
+            return
+
+        pl.plot(self.waves, self.flux, color='gray', alpha=0.5,
+                label="Atlas")
+        pl.scatter(self.peaks, np.zeros(len(self.peaks)), marker='+',
+                   alpha=0.5, color='gray')
+        pl.vlines(self.lines, [0], self.amplitude, color='gray', alpha=0.5)
+        for i in range(self.n_det):
+            lines = self.det_lines_ref[i]
+            pixels = self.det_lines_pix[i]
+            # get good data for fit
+            use = self.det_lines_use[i].copy()
+            good_lines = list(compress(pixels, use))
+            good_waves = list(compress(lines, use))
+            for line in good_lines:
+                li = int(line)
+                line_wls = self.det_waves[i][li-2:li+4]
+                line_flx = self.det_flux_with_noise[i][li-2:li+4]
+                pl.plot(line_wls, line_flx, color=self.det_colors[i])
+            pl.scatter(good_waves, np.zeros(len(good_waves)) - 50, marker='x',
+                       color=self.det_colors[i], label="Use %s" %
+                                                       self.det_bands[i])
+        pl.title("NGPS Simulated %s, Clean Lines: NL=%.2f, OL=%.2f (A)" %
+                 (self.lamp, self.neighbor_limit, self.offset_limit))
+        pl.xlabel("Wavelength(A)")
+        pl.ylabel("Simulated DN")
+        pl.legend()
+        pl.ylim((-200, self.ymax))
+        pl.xlim((3000., 10500.))
+        pl.show()
+
     def fit_arc(self, fit_order=5, s2n_cut=False, do_poly=True, smoo=0.5):
         """Perform residual analysis using NGPS simulated arc observations"""
         if self.det_lines_use is None:
@@ -721,7 +758,7 @@ class AtlasSpectrum(NGPS):
         pl.show()
 
     def analyze(self, neighbor_limit=1.0, offset_limit=0.5, do_plot=False):
-        """Perform residual analysis
+        """Analyze peaks for clean, unblended set
 
         This function accumulates the data that are used to perform fitting.
         The following items are produced:
@@ -748,6 +785,7 @@ class AtlasSpectrum(NGPS):
             line_s2n = []
             line_dw = []
             line_dvel = []
+            n_line_use = 0
             for iline, line_wave in enumerate(lines):
                 # calculate s2n
                 ipx = int(pixels[iline])
@@ -779,6 +817,7 @@ class AtlasSpectrum(NGPS):
                         line_ref.append(self.lines[t])
                         line_dw.append(self.lines[t] - line_wave)
                         line_dvel.append(299792. * line_dw[-1] / self.lines[t])
+                        n_line_use += 1
                     else:
                         # no matching atlas line within offset limit
                         line_use.append(False)
@@ -792,11 +831,16 @@ class AtlasSpectrum(NGPS):
             det_lines_dw.append(line_dw)
             det_lines_dvel.append(line_dvel)
 
+            print("Found %d clean lines for %s" % (n_line_use,
+                                                   self.det_bands[idet]))
+
         self.det_lines_use = det_lines_use
         self.det_lines_s2n = det_lines_s2n
         self.det_lines_ref = det_lines_ref
         self.det_lines_dw = det_lines_dw
         self.det_lines_dvel = det_lines_dvel
+        self.neighbor_limit = neighbor_limit
+        self.offset_limit = offset_limit
 
         if not do_plot:
             return
