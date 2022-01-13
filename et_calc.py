@@ -5,7 +5,7 @@ import numpy as np
 
 
 def et_calc(reflectivity=0.6, etalon_separation=40.,
-            fits_file=None, do_plot=False):
+            fits_file=None, delta_wave=0.2, do_plot=False):
     """Calculate etalon throughput using a simplified formula
 
         T = 1 / (1 + 4 * R / ( (1 - R)^2) * ( sin(2*pi*t / wl) ^2))
@@ -18,9 +18,9 @@ def et_calc(reflectivity=0.6, etalon_separation=40.,
     # set up constants
     refl = reflectivity
     etsp = etalon_separation * 10000.
+    dw = delta_wave
     w0 = 3000.
     w1 = 10500.
-    dw = 0.2
 
     wls = np.arange(start=w0, stop=w1, step=dw, dtype=np.float)
     print("%d points" % len(wls))
