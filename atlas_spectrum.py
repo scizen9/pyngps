@@ -517,7 +517,8 @@ class AtlasSpectrum(NGPS):
         # are we an etalon?
         if 'ETALON' in self.header:
             if self.header['ETALON']:
-                peak_width = 20.0
+                peak_width = 75.0
+                smooth_width = 1
             else:
                 peak_width = 5.0
         else:
@@ -525,7 +526,9 @@ class AtlasSpectrum(NGPS):
         slope_thresh = 0.07 * smooth_width / 2. / 100.
         ampl_thresh = 0.
         if verbose:
-            print("Finding observed atlas lines...")
+            print("Finding observed atlas lines with "
+                  "pkwid = %.1f, slthr = %0.3f, smwid = %d" %
+                  (peak_width, slope_thresh, smooth_width))
         at_cent, at_avwsg, at_hgt, at_pix = findpeaks(self.waves, self.flux,
                                                       smooth_width,
                                                       slope_thresh,
